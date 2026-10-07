@@ -212,12 +212,9 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
     <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал заданий postgresql</h2>
     <div class="audit-filters">
       <input type="text" id="pj-filter-job" placeholder="Имя задачи..." oninput="PgJobs.render()" style="min-width:11rem">
-      <label style="font-weight:400;font-size:.85rem;display:flex;align-items:center;gap:.35rem;">
-        <input type="checkbox" id="pj-only-errors" onchange="PgJobs.render()" style="width:auto;margin:0;"> Только ошибки
-      </label>
-      <label style="font-weight:400;font-size:.85rem;display:flex;align-items:center;gap:.35rem;">
-        <input type="checkbox" id="pj-only-mine" onchange="PgJobs.render()" style="width:auto;margin:0;"> Только мои
-      </label>
+      <select id="pj-filter-combo" onchange="PgJobs.render()" style="min-width:18rem;max-width:26rem" title="Отбор по колонке «Задача и шаг»">
+        <option value="">Все задачи и шаги</option>
+      </select>
       <input type="number" id="pj-limit" value="10" min="10" max="1000" step="10" style="width:5.5rem" title="Сколько последних записей загрузить">
       <button class="ghost" style="padding:.25rem .6rem;font-size:.8rem;" onclick="PgJobs.reload()">Обновить</button>
     </div>
@@ -237,7 +234,6 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   </div>
 
   <script>
-  const CURRENT_USER = {{ username | default('') | tojson }};
   const Audit = function() {
     let entries = [];
     return {
@@ -324,32 +320,49 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
             entries = [];
             tbl.style.display = 'none';
             st.innerHTML = '<div class="alert err">' + this.esc(data.error) + '</div>';
+            this.buildCombo();
             return;
           }
           entries = data.entries || [];
+          this.buildCombo();
           this.render();
         } catch (e) {
           tbl.style.display = 'none';
           st.innerHTML = '<div class="alert err">Не удалось загрузить журнал заданий: ' + this.esc(e.message) + '</div>';
         }
       },
-      isErr(e) {
-        // Прерванный шаг — всегда ошибка; иначе ошибка, если код != 0.
-        if (e.status === 'd') return true;
-        const r = e.result;
-        return r !== null && r !== undefined && r !== '' && Number(r) !== 0;
-      },
       filter() {
         const job = document.getElementById('pj-filter-job').value.toLowerCase();
-        const onlyErr = document.getElementById('pj-only-errors').checked;
-        const onlyMine = document.getElementById('pj-only-mine').checked;
-        const me = (CURRENT_USER || '').toLowerCase();
+        const combo = document.getElementById('pj-filter-combo').value;
         return entries.filter(e => {
           if (job && !(e.job || '').toLowerCase().includes(job)) return false;
-          if (onlyErr && !this.isErr(e)) return false;
-          if (onlyMine && (!me || !(e.job || '').toLowerCase().includes(me))) return false;
+          if (combo && [e.job, e.step].filter(Boolean).join(' · ') !== combo) return false;
           return true;
         });
+      },
+      // Опции select — из того, что реально лежит в колонке «Задача и шаг».
+      buildCombo() {
+        const sel = document.getElementById('pj-filter-combo');
+        const keep = sel.value;
+        const seen = [];
+        entries.forEach(e => {
+          const k = [e.job, e.step].filter(Boolean).join(' · ');
+          if (k && seen.indexOf(k) === -1) seen.push(k);
+        });
+        seen.sort();
+        sel.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = 'Все задачи и шаги';
+        sel.appendChild(first);
+        seen.forEach(k => {
+          const o = document.createElement('option');
+          o.value = k;
+          o.textContent = k;
+          sel.appendChild(o);
+        });
+        if (keep && seen.indexOf(keep) !== -1) sel.value = keep;
+        else sel.value = '';
       },
       // pgAgent отдаёт время с таймзоной сервера — показываем в поясе браузера.
       fmt(s) {

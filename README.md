@@ -179,7 +179,7 @@ requirements.txt
 | `/api/databases` | GET | Список не-шаблонных БД |
 | `/api/backups?db=X` | GET | Basenames `*.backup*` под `BACKUP_ROOT/X` |
 | `/api/audit-log` | GET | Журнал restore-операций из `restore_audit.log` |
-| `/api/pgagent-log?job=…&status=…&limit=…` | GET | Журнал заданий postgresql (pgAgent): задача и шаг одной колонкой, начало, результат, длительность, вывод шага (до 20 000 символов); limit по умолчанию 10; фильтры — имя задачи, только ошибки, только мои; ходит только в базу `postgres` |
+| `/api/pgagent-log?job=…&status=…&limit=…` | GET | Журнал заданий postgresql (pgAgent): задача и шаг одной колонкой, начало, результат, длительность, вывод шага (до 20 000 символов); limit по умолчанию 10; фильтры — текстовый поиск и отбор по колонке «Задача и шаг»; ходит только в базу `postgres` |
 | `/restore` | POST | Запуск restore job → **202** `{job_id, progress_url}` |
 | `/restore/progress/<id>` | GET | **SSE**: `event: log`, `event: done` |
 | `/restore/jobs/<id>` | GET | JSON-статус job'а (без stdout/stderr) |

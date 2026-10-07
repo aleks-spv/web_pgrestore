@@ -313,8 +313,6 @@ def register_security(app) -> None:
             "csrf_token": get_csrf_token(),
             "auth_enabled": cfg.auth_enabled,
             "auth_disabled_banner": not cfg.auth_enabled,
-            # Who is signed in — used by the "only mine" filters in the UI.
-            "username": session.get("username") or "",
         }
 
     @app.after_request
