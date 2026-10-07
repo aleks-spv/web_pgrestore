@@ -211,7 +211,6 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   <div class="card audit-section" id="pgagent-log-anchor">
     <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал заданий postgresql</h2>
     <div class="audit-filters">
-      <input type="text" id="pj-filter-job" placeholder="Имя задачи..." oninput="PgJobs.render()" style="min-width:11rem">
       <select id="pj-filter-combo" onchange="PgJobs.render()" style="min-width:18rem;max-width:26rem" title="Отбор по колонке «Задача и шаг»">
         <option value="">Все задачи и шаги</option>
       </select>
@@ -332,10 +331,8 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
         }
       },
       filter() {
-        const job = document.getElementById('pj-filter-job').value.toLowerCase();
         const combo = document.getElementById('pj-filter-combo').value;
         return entries.filter(e => {
-          if (job && !(e.job || '').toLowerCase().includes(job)) return false;
           if (combo && [e.job, e.step].filter(Boolean).join(' · ') !== combo) return false;
           return true;
         });
