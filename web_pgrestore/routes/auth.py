@@ -5,6 +5,7 @@ from flask import (
     Blueprint,
     current_app,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -12,7 +13,12 @@ from flask import (
     url_for,
 )
 
-from ..security import check_login, rate_limited, session_valid
+from ..security import (
+    check_login,
+    rotate_csrf_token,
+    rate_limited,
+    session_valid,
+)
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -28,9 +34,15 @@ def login():
         if check_login(cfg, username, password):
             session["auth"] = True
             session.permanent = True
-            if request.accept_mimetypes.best == "application/json" or request.is_json:
-                return jsonify({"ok": True})
-            return redirect(url_for("pages.index"))
+            # Rotate the CSRF token after authentication (Django-style):
+            # prevents session-fixation and gives a clean token.
+            resp = make_response(
+                jsonify({"ok": True})
+                if request.accept_mimetypes.best == "application/json" or request.is_json
+                else redirect(url_for("pages.index"))
+            )
+            rotate_csrf_token(resp)
+            return resp
         if request.accept_mimetypes.best == "application/json" or request.is_json:
             return jsonify({"error": "Неверный логин или пароль"}), 401
         return render_template("login.html", error="Неверный логин или пароль"), 401
@@ -42,4 +54,6 @@ def login():
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
     session.clear()
-    return redirect(url_for("auth.login"))
+    resp = make_response(redirect(url_for("auth.login")))
+    rotate_csrf_token(resp)
+    return resp
