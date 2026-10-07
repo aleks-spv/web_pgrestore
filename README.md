@@ -325,11 +325,32 @@ gunicorn -w 4 -b 127.0.0.1:5000 --timeout 300 'web_pgrestore:create_app()'
 ### systemd
 
 `install_service.sh` генерирует unit (User/Group, WorkingDirectory,
-`ReadWritePaths` на `.env` и audit-лог, `NoNewPrivileges`, `ProtectSystem=strict`).
+`EnvironmentFile` на `.env`, `ExecStart` из `.venv`, `Restart=always`,
+`NoNewPrivileges`, `PrivateDevices`, `ProtectSystem=full`).
 
 ```bash
-sudo ./install_service.sh
+sudo ./install_service.sh           # установка / обновление
+sudo ./install_service.sh -remove   # удалить то, что создавал скрипт
+sudo ./install_service.sh -h        # справка
 ```
+
+#### Удаление (`-remove`)
+
+| Удаляет | Не трогает |
+|---|---|
+| сервис `pg_web`: `disable --now`, unit-файл `/etc/systemd/system/pg_web.service`, `daemon-reload`, `reset-failed` | исходники в `APP_DIR` |
+| виртуальное окружение `$APP_DIR/.venv` | бэкапы PostgreSQL (`BACKUP_ROOT`) и `restore_audit.log` |
+| `$APP_DIR/.env` — в нём `PGPASSWORD`, `AUTH_PASS`, `FLASK_SECRET_KEY` | пакет `python3-venv` (apt), системные пользователи (`www-data`/`pgweb`), права `chown` |
+
+- Ключ разбирается **до** установочных шагов, поэтому по дороге не создаются
+  заново venv, `.env` и unit-файл.
+- Запуск идемпотентен: повторный `-remove` сообщает, что уже удалено, и выходит с 0.
+- При интерактивном запуске скрипт спрашивает `Продолжить? [y/N]`; когда stdin
+  не терминал, требуется явный ключ `-y`:
+  `sudo ./install_service.sh -remove -y`.
+- После удаления повторная установка создаст `.env` из `.env.example` и
+  сгенерирует **новый** `FLASK_SECRET_KEY` — все прежние сессии станут
+  недействительными.
 
 После смены `.env` через UI параметры `APP_*`, `TRUST_PROXY` применяются
 только после `systemctl restart`.

@@ -5,10 +5,128 @@ set -euo pipefail
 APP_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 echo "Папка приложения: $APP_DIR"
 
-# Скрипт трогает /etc/systemd, chown и apt — нужен root
+# ---------- Общие константы ----------
+SVC_NAME="pg_web"
+UNIT_FILE="/etc/systemd/system/${SVC_NAME}.service"
+VENV="$APP_DIR/.venv"
+MODE="install"
+CONFIRM=0
+
+usage() {
+    cat <<EOF
+Использование: sudo $0 [опции]
+
+  (без аргументов)     установка/обновление systemd-сервиса
+  -remove, --remove    удалить то, что создавал скрипт:
+                         * сервис $SVC_NAME (stop + disable + unit-файл)
+                         * виртуальное окружение $VENV
+                         * $APP_DIR/.env  (PGPASSWORD, AUTH_PASS, FLASK_SECRET_KEY!)
+                       НЕ удаляет: исходники, бэкапы PostgreSQL,
+                       пакет python3-venv, системных пользователей.
+  -y, --yes            не спрашивать подтверждение (обязателен, когда stdin не терминал)
+  -h, --help           эта справка
+EOF
+}
+
+do_remove() {
+    echo
+    echo "=== Удаление web_pgrestore ==="
+    echo "Будет удалено:"
+    echo "  1) systemd-сервис '$SVC_NAME' — stop, disable, $UNIT_FILE"
+    echo "  2) виртуальное окружение — $VENV"
+    echo "  3) конфигурация с секретами — $APP_DIR/.env"
+    echo "НЕ будет удалено:"
+    echo "  - исходники в $APP_DIR"
+    echo "  - бэкапы PostgreSQL (BACKUP_ROOT) и restore_audit.log"
+    echo "  - пакет python3-venv и системные пользователи"
+    echo
+
+    if [ "$CONFIRM" -ne 1 ]; then
+        if [ -t 0 ]; then
+            A=""
+            read -rp "Продолжить? [y/N]: " A || A=""
+            case "$A" in
+                y|Y|д|Д|yes|YES|да|Да) ;;
+                *) echo "Отменено."; exit 0 ;;
+            esac
+        else
+            echo "ОШИБКА: неинтерактивный запуск требует явного согласия:"
+            echo "        sudo $0 -remove -y"
+            exit 1
+        fi
+    fi
+
+    # 1) сервис: остановить, отключить, удалить unit.
+    #    systemctl может отсутствовать (контейнер/WSL) — без проверки
+    #    `set -e` оборвёт скрипт на daemon-reload.
+    HAVE_SYSTEMCTL=0
+    command -v systemctl >/dev/null 2>&1 && HAVE_SYSTEMCTL=1
+    UNIT_EXISTS=0
+    [ -f "$UNIT_FILE" ] && UNIT_EXISTS=1
+    if [ "$HAVE_SYSTEMCTL" -eq 1 ] && { [ "$UNIT_EXISTS" -eq 1 ] \
+        || systemctl is-enabled --quiet "$SVC_NAME" 2>/dev/null \
+        || systemctl is-active --quiet "$SVC_NAME" 2>/dev/null; }; then
+        systemctl disable --now "$SVC_NAME" >/dev/null 2>&1 || true
+        rm -f "$UNIT_FILE"
+        systemctl daemon-reload || true
+        systemctl reset-failed "$SVC_NAME" >/dev/null 2>&1 || true
+        echo "Сервис '$SVC_NAME' остановлен, отключён, unit-файл удалён."
+    elif [ "$HAVE_SYSTEMCTL" -eq 1 ]; then
+        echo "Сервис '$SVC_NAME' не установлен — ок."
+    else
+        [ "$UNIT_EXISTS" -eq 1 ] && rm -f "$UNIT_FILE" \
+            && echo "systemctl не найден — убран только $UNIT_FILE" \
+            || echo "systemctl не найден, сервис не установлен — ок."
+    fi
+
+    # 2) виртуальное окружение
+    if [ -d "$VENV" ]; then
+        rm -rf "$VENV"
+        echo "Удалено venv: $VENV"
+    else
+        echo "venv не найден — ок."
+    fi
+
+    # 3) .env с секретами
+    if [ -f "$APP_DIR/.env" ]; then
+        rm -f "$APP_DIR/.env"
+        echo "Удалён $APP_DIR/.env (PGPASSWORD, AUTH_PASS, FLASK_SECRET_KEY)"
+    else
+        echo ".env не найден — ок."
+    fi
+
+    echo
+    echo "Удаление завершено. Исходники и бэкапы сохранены."
+    echo "Повторный запуск $0 -remove безопасен (всё уже удалено)."
+}
+
+# ---------- Разбор аргументов ----------
+for arg in "$@"; do
+    case "$arg" in
+        -remove|--remove) MODE="remove" ;;
+        -y|--yes) CONFIRM=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            echo "ОШИБКА: неизвестный аргумент: $arg"
+            echo
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Скрипт трогает /etc/systemd, chown и apt — нужен root.
+# Проверка стоит ПОСЛЕ разбора аргументов, чтобы -h работал без root.
 if [ "$(id -u)" -ne 0 ]; then
     echo "ОШИБКА: запусти от root: sudo $0"
     exit 1
+fi
+
+# Режим удаления обрабатывается ДО любых установочных шагов, иначе по дороге
+# создались бы заново venv, .env и unit-файл.
+if [ "$MODE" = "remove" ]; then
+    do_remove
+    exit 0
 fi
 
 [ -f "$APP_DIR/app.py" ] || { echo "ОШИБКА: app.py нет в $APP_DIR"; exit 1; }
@@ -137,7 +255,6 @@ if ! grep -qE '^FLASK_SECRET_KEY=..+' "$APP_DIR/.env" 2>/dev/null; then
 fi
 
 # ---------- Виртуальное окружение + зависимости ----------
-VENV="$APP_DIR/.venv"
 create_venv() { python3 -m venv "$VENV" >/dev/null 2>&1; }
 
 if [ ! -x "$VENV/bin/python" ] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
@@ -170,9 +287,7 @@ echo "Зависимости из requirements.txt установлены в ven
 echo "Настраиваем права..."
 chown -R "$SVC_USER":"$SVC_GROUP" "$APP_DIR"
 
-# Имя сервиса
-SVC_NAME="pg_web"
-UNIT_FILE="/etc/systemd/system/${SVC_NAME}.service"
+# Имя сервиса и путь к unit заданы вверху скрипта (общие для install/remove)
 
 # Пишем unit
 cat > "$UNIT_FILE" <<EOF
