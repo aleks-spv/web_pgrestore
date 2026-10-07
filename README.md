@@ -179,7 +179,7 @@ requirements.txt
 | `/api/databases` | GET | Список не-шаблонных БД |
 | `/api/backups?db=X` | GET | Basenames `*.backup*` под `BACKUP_ROOT/X` |
 | `/api/audit-log` | GET | Журнал restore-операций из `restore_audit.log` |
-| `/api/pgagent-log?db=…&job=…&status=…&limit=…` | GET | Журнал задач pgAgent: задача, шаг, статус, результат, вывод шага (до 20 000 символов) |
+| `/api/pgagent-log?job=…&status=…&limit=…` | GET | Журнал заданий postgresql (pgAgent): задача, шаг, статус, результат, вывод шага (до 20 000 символов); ходит только в базу `postgres` |
 | `/restore` | POST | Запуск restore job → **202** `{job_id, progress_url}` |
 | `/restore/progress/<id>` | GET | **SSE**: `event: log`, `event: done` |
 | `/restore/jobs/<id>` | GET | JSON-статус job'а (без stdout/stderr) |
@@ -401,7 +401,7 @@ python3 -m unittest tests.test_security tests.test_smoke -v
 | auth-off старт падает | задайте auth **или** `ALLOW_UNAUTHENTICATED=1` |
 | rate-limit «слишком часто» | на `/login` в счётчике только POST (страницу можно открывать сколько угодно); глубже — nginx `limit_req`, не трогайте `RATE_LIMIT_ENABLED` в проде |
 | лог job'а пуст после рестарта | job'ы in-memory; перезапустите сервис |
-| Журнал задач пуст / «no schema named pgagent» | pgAgent не установлен или живёт в другой базе — выберите базу в фильтре карточки |
+| Журнал заданий пуст / «отношение pgagent.pga_jobsteplog не существует» | pgAgent не установлен в базе `postgres` (других баз карточка не читает) |
 | `pg_restore` killed by timeout | поднимите `SUBPROCESS_TIMEOUT` |
 | БД пропала после ошибки | `DROP` уже прошёл — восстанавливайте из бэкапа повторно |
 

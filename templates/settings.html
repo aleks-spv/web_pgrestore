@@ -51,7 +51,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
 <div class="topbar">
   <a href="/">← К восстановлению</a>
   <a href="#audit-log-anchor">Журнал audit</a>
-  <a href="#pgagent-log-anchor">Журнал задач</a>
+  <a href="#pgagent-log-anchor">Журнал заданий</a>
   <a href="/logout">Выйти</a>
 </div>
 <h1>Настройки</h1>
@@ -208,9 +208,8 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   </div>
 
   <div class="card audit-section" id="pgagent-log-anchor">
-    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал задач (pgAgent)</h2>
+    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал заданий postgresql</h2>
     <div class="audit-filters">
-      <select id="pj-filter-db" onchange="PgJobs.reload()" title="База, в которой лежит схема pgagent"></select>
       <input type="text" id="pj-filter-job" placeholder="Имя задачи..." oninput="PgJobs.render()" style="min-width:11rem">
       <select id="pj-filter-status" onchange="PgJobs.render()">
         <option value="">Все статусы</option>
@@ -312,58 +311,31 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
 
   const PgJobs = function() {
     let entries = [];
-    let dbsLoaded = false;
     return {
       esc(s) {
         if (s == null) return '';
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       },
-      async loadDbs() {
-        if (dbsLoaded) return;
-        try {
-          const res = await fetch('/api/databases');
-          const data = await res.json();
-          const names = data.databases || [];
-          // pgAgent живёт в postgres — она же обязана быть выбрана по умолчанию.
-          // Иначе <select> сам берёт первую базу из списка, в ней схемы pgagent
-          // нет и API честно отвечает «отношение pgagent.pga_jobsteplog не существует».
-          const list = ['postgres'].concat(names.filter(n => n !== 'postgres'));
-          const sel = document.getElementById('pj-filter-db');
-          sel.innerHTML =
-            list.map(n => '<option value="' + this.esc(n) + '">' + this.esc(n) + '</option>').join('');
-          sel.value = 'postgres';
-          dbsLoaded = true;
-        } catch (e) {
-          /* остаётся опция postgres из разметки */
-        }
-      },
       async load() {
-        await this.loadDbs();
-        const sel = document.getElementById('pj-filter-db');
-        const db = sel.value || 'postgres';
+        // pgAgent живёт в базе postgres — выбора базы нет, API ходит туда сам.
         const limit = document.getElementById('pj-limit').value || 200;
         const st = document.getElementById('pj-status');
         const tbl = document.getElementById('pj-body').closest('table');
         st.innerHTML = '<div class="audit-empty">Загрузка...</div>';
         try {
-          const res = await fetch('/api/pgagent-log?db=' + encodeURIComponent(db) +
-                                  '&limit=' + encodeURIComponent(limit));
+          const res = await fetch('/api/pgagent-log?limit=' + encodeURIComponent(limit));
           const data = await res.json();
           if (data.error) {
             entries = [];
             tbl.style.display = 'none';
-            let msg = this.esc(data.error);
-            if (data.error.indexOf('pgagent') !== -1) {
-              msg += '<div class="hint">В этой базе схемы pgAgent нет — выберите в фильтре ту, где он установлен (обычно <code>postgres</code>).</div>';
-            }
-            st.innerHTML = '<div class="alert err">' + msg + '</div>';
+            st.innerHTML = '<div class="alert err">' + this.esc(data.error) + '</div>';
             return;
           }
           entries = data.entries || [];
           this.render();
         } catch (e) {
           tbl.style.display = 'none';
-          st.innerHTML = '<div class="alert err">Не удалось загрузить журнал задач: ' + this.esc(e.message) + '</div>';
+          st.innerHTML = '<div class="alert err">Не удалось загрузить журнал заданий: ' + this.esc(e.message) + '</div>';
         }
       },
       filter() {

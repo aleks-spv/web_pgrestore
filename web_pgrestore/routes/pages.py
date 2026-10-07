@@ -27,7 +27,6 @@ from ..config import (
     update_env_file,
 )
 from ..db import get_conn
-from ..restore import is_valid_dbname
 from ..security import rate_limited
 
 pages_bp = Blueprint("pages", __name__)
@@ -142,8 +141,8 @@ SELECT j.jobname AS job,
        s.jstname AS step,
        l.jslstatus::text AS status,
        l.jslresult AS result,
-       l.jslstart AS started,
-       l.jslend AS finished,
+       {started} AS started,
+       {finished} AS finished,
        left(l.jsloutput, 20000) AS output
   FROM pgagent.pga_jobsteplog l
   JOIN pgagent.pga_jobstep s ON s.jstid = l.jsljstid
@@ -153,6 +152,25 @@ SELECT j.jobname AS job,
  ORDER BY l.jslstart DESC NULLS LAST, l.jslid DESC
  LIMIT %s
 """
+
+
+def _pgagent_sql(cur):
+    """Build the log query against the columns this pgAgent actually has.
+
+    Time columns are the ones that differ between releases: some installs
+    have no `jslend` at all, and one hard-coded column would make the whole
+    card fail. Probe the schema once, fall back to NULL.
+    """
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns"
+        " WHERE table_schema = 'pgagent'"
+        "   AND table_name = 'pga_jobsteplog'"
+    )
+    have = {row[0] for row in cur.fetchall()}
+    return _PGAGENT_SQL.format(
+        started="l.jslstart" if "jslstart" in have else "NULL",
+        finished="l.jslend" if "jslend" in have else "NULL",
+    )
 
 
 def _jsonable(value):
@@ -172,15 +190,12 @@ def _jsonable(value):
 def pgagent_log_view():
     """Read-only pgAgent job log (used by /settings).
 
-    pgAgent itself lives in the `postgres` database by default; `?db=` lets
-    the client read it elsewhere. A missing `pgagent` schema (or a database
-    the backend cannot reach) comes back as `error` inside a 200 payload so
-    the page can show a readable message instead of a 500.
+    pgAgent is installed in the `postgres` database on this host, and there
+    is deliberately no database picker — one less thing to get wrong. A
+    missing `pgagent` schema (or an unreachable database) comes back as
+    `error` inside a 200 payload so the page can show a readable message
+    instead of a 500.
     """
-    dbname = (request.args.get("db") or "postgres").strip()
-    if not is_valid_dbname(dbname):
-        return jsonify({"entries": [], "error": f"Недопустимое имя базы: {dbname}"}), 400
-
     job = (request.args.get("job") or "").strip()[:200]
     status = (request.args.get("status") or "").strip()
     if status not in ("", "s", "f", "d"):
@@ -194,25 +209,25 @@ def pgagent_log_view():
 
     cfg = current_app.config["APP_CFG"]
     try:
-        with closing(get_conn(cfg, dbname=dbname)) as conn:
+        with closing(get_conn(cfg, dbname="postgres")) as conn:
             conn.autocommit = True
             with closing(conn.cursor()) as cur:
-                cur.execute(_PGAGENT_SQL, (job, job, status, status, limit))
+                sql = _pgagent_sql(cur)   # probes pgagent schema first
+                cur.execute(sql, (job, job, status, status, limit))
                 columns = [d[0] for d in cur.description]
                 rows = cur.fetchall()
     except psycopg2.Error as exc:
         detail = str(getattr(exc, "pgerror", None) or exc).strip().splitlines()
         return jsonify({
             "entries": [],
-            "db": dbname,
             "limit": limit,
-            "error": f"{dbname}: {detail[0] if detail else 'нет доступа к базе'}",
+            "error": f"postgres: {detail[0] if detail else 'нет доступа к базе'}",
         }), 200
 
     entries = [
         {k: _jsonable(v) for k, v in zip(columns, row)} for row in rows
     ]
-    return jsonify({"entries": entries, "db": dbname, "limit": limit})
+    return jsonify({"entries": entries, "limit": limit})
 
 
 _SECRET_SENTINEL = "__KEEP__"
