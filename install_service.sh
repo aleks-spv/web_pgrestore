@@ -208,6 +208,10 @@ if [ -t 0 ]; then
     read -rp "Порт веб-панели [$V]: " A || A=""
     set_env APP_PORT "${A:-$V}"
 
+    V=$(get_env APP_HOST); V="${V:-127.0.0.1}"
+    read -rp "Адрес для слушания (127.0.0.1 = только этот сервер, 0.0.0.0 = все интерфейсы) [$V]: " A || A=""
+    set_env APP_HOST "${A:-$V}"
+
     V=$(get_env PGHOST); V="${V:-/var/run/postgresql}"
     read -rp "Хост PostgreSQL (сокет или TCP) [$V]: " A || A=""
     set_env PGHOST "${A:-$V}"
