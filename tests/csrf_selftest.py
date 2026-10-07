@@ -113,6 +113,69 @@ def main():
     else:
         failures.append(f"D: correct login -> {r.status_code} (want 302)")
 
+    # --- Scenario E: non-ASCII token must not crash --------------------
+    # hmac.compare_digest(str, str) raises TypeError on non-ASCII, which used
+    # to turn a forged token into a 500 instead of a 400.
+    client.delete_cookie("session")
+    client.delete_cookie(CSRF_COOKIE)
+    r = client.post("/login", data={"username": "admin",
+                                    "password": "secret",
+                                    "_csrf": "токен-привет"})
+    if r.status_code == 500:
+        failures.append("E: non-ASCII CSRF token -> 500 (compare_digest TypeError)")
+    elif r.status_code == 400:
+        print("[E] non-ASCII token -> 400 rejected, no 500 OK")
+    else:
+        failures.append(f"E: non-ASCII token -> {r.status_code} (want 400)")
+
+    # --- Scenario F: Origin check (Django CsrfViewMiddleware parity) ---
+    client.delete_cookie("session")
+    client.delete_cookie(CSRF_COOKIE)
+    r = client.get("/login")
+    token = token_from_set_cookie(r)
+    r = client.post("/login", data={"username": "admin", "password": "wrong",
+                                    "_csrf": token},
+                    headers={"Origin": "http://localhost"})
+    if r.status_code == 400:
+        failures.append(f"F: same-origin POST refused ({r.status_code})")
+    else:
+        print(f"[F] same-origin Origin -> {r.status_code} (not 400) OK")
+    r = client.post("/login", data={"username": "admin", "password": "wrong",
+                                    "_csrf": token},
+                    headers={"Origin": "http://evil.example"})
+    if r.status_code == 400:
+        print("[F] foreign Origin -> 400 refused OK")
+    else:
+        failures.append(f"F: foreign Origin -> {r.status_code} (want 400)")
+
+    # --- Scenario G: /login CSRF failure re-renders with a fresh token -
+    # A bare JSON 400 left the user stuck on a form carrying a dead token.
+    client.delete_cookie("session")
+    client.delete_cookie(CSRF_COOKIE)
+    r = client.post("/login", data={"username": "admin", "password": "secret"})
+    body = r.get_data(as_text=True)
+    fresh = re.search(r'name="_csrf" value="([^"]+)"', body)
+    if r.status_code == 400 and fresh and fresh.group(1):
+        print("[G] /login CSRF failure -> rendered page with fresh token OK")
+    else:
+        failures.append(
+            f"G: want 400 + re-rendered form, got {r.status_code} "
+            f"token={'yes' if fresh and fresh.group(1) else 'NO'}"
+        )
+
+    # --- Scenario H: cookie flags follow the documented defaults -------
+    client.delete_cookie("session")
+    client.delete_cookie(CSRF_COOKIE)
+    r = client.get("/login")
+    jars = [c for c in r.headers.getlist("Set-Cookie")
+            if c.startswith(CSRF_COOKIE + "=")]
+    if not jars:
+        failures.append("H: _csrf_token Set-Cookie missing on GET /login")
+    elif "SameSite=Lax" in jars[0] and "HttpOnly" in jars[0]:
+        print("[H] _csrf_token HttpOnly + SameSite=Lax OK")
+    else:
+        failures.append(f"H: unexpected flags: {jars[0]}")
+
     print()
     if failures:
         print("=== SELF-TEST FAILED ===")

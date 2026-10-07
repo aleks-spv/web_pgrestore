@@ -87,6 +87,10 @@ class Config:
     TRUST_PROXY: bool = False
     ALLOW_UNAUTHENTICATED: bool = False
     SESSION_COOKIE_SECURE: bool = False
+    # Comma-separated "scheme://host[:port]" origins allowed to POST to us.
+    # Escape hatch for reverse proxies where the browser Origin host differs
+    # from the upstream Host header (Django's CSRF_TRUSTED_ORIGINS analogue).
+    CSRF_TRUSTED_ORIGINS: str = ""
     RATE_LIMIT_ENABLED: bool = True
     # computed
     ENV_PATH: Path = field(default_factory=lambda: ENV_PATH)
@@ -155,6 +159,7 @@ class Config:
             TRUST_PROXY=_env_bool("TRUST_PROXY", False),
             ALLOW_UNAUTHENTICATED=_env_bool("ALLOW_UNAUTHENTICATED", False),
             SESSION_COOKIE_SECURE=_env_bool("SESSION_COOKIE_SECURE", False),
+            CSRF_TRUSTED_ORIGINS=_env_str("CSRF_TRUSTED_ORIGINS", ""),
             RATE_LIMIT_ENABLED=_env_bool("RATE_LIMIT_ENABLED", True),
             ENV_PATH=ENV_PATH,
         )
