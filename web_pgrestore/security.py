@@ -325,6 +325,12 @@ def register_security(app) -> None:
         eliminating the "CSRF token missing or invalid" lockout on /login.
         """
         _write_csrf_cookie(resp, get_csrf_token())
+        # F3: this response carries the CSRF token (in the Set-Cookie and,
+        # for pages, in the HTML form). Never let the browser or an upstream
+        # proxy cache it — a page replayed from the back/forward cache holds
+        # a token that has since rotated, and the submit then fails with
+        # "токен устарел".
+        resp.headers.setdefault("Cache-Control", "no-store")
         return resp
 
     @app.after_request

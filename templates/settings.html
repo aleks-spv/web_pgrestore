@@ -51,6 +51,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
 <div class="topbar">
   <a href="/">← К восстановлению</a>
   <a href="#audit-log-anchor">Журнал audit</a>
+  <a href="#pgagent-log-anchor">Журнал задач</a>
   <a href="/logout">Выйти</a>
 </div>
 <h1>Настройки</h1>
@@ -176,7 +177,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   </form>
 
   <div class="card audit-section" id="audit-log-anchor">
-    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал audit (только чтение)</h2>
+    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал audit</h2>
     <div class="audit-filters">
       <select id="audit-filter-level" onchange="Audit.render()">
         <option value="">Все уровни</option>
@@ -203,6 +204,42 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
         </tr>
       </thead>
       <tbody id="audit-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card audit-section" id="pgagent-log-anchor">
+    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал задач (pgAgent)</h2>
+    <div class="audit-filters">
+      <select id="pj-filter-db" onchange="PgJobs.reload()" title="База, в которой лежит схема pgagent"></select>
+      <input type="text" id="pj-filter-job" placeholder="Имя задачи..." oninput="PgJobs.render()" style="min-width:11rem">
+      <select id="pj-filter-status" onchange="PgJobs.render()">
+        <option value="">Все статусы</option>
+        <option value="s">s — начат</option>
+        <option value="f">f — завершён</option>
+        <option value="d">d — прерван</option>
+      </select>
+      <input type="number" id="pj-limit" value="200" min="10" max="1000" step="10" style="width:5.5rem" title="Сколько последних записей загрузить">
+      <button class="ghost" style="padding:.25rem .6rem;font-size:.8rem;" onclick="PgJobs.reload()">Обновить</button>
+    </div>
+    <div class="hint" style="margin-bottom:.4rem">
+      Статусы pgAgent: <code>s</code> — начат, <code>f</code> — завершён, <code>d</code> — прерван.
+      Результат: <code>0</code> — ок, иначе код ошибки, пусто — не записан.
+      Вывод шага обрезается до 20 000 символов (клик по ячейке разворачивает).
+    </div>
+    <div id="pj-status"></div>
+    <table class="audit-table" style="display:none;">
+      <thead>
+        <tr>
+          <th>Задача</th>
+          <th>Шаг</th>
+          <th>Статус</th>
+          <th>Результат</th>
+          <th>Начало</th>
+          <th>Конец</th>
+          <th>Вывод</th>
+        </tr>
+      </thead>
+      <tbody id="pj-body"></tbody>
     </table>
   </div>
 
@@ -272,6 +309,112 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
       reload() { this.load(); }
     };
   }();
+
+  const PgJobs = function() {
+    let entries = [];
+    let dbsLoaded = false;
+    return {
+      esc(s) {
+        if (s == null) return '';
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      },
+      async loadDbs() {
+        if (dbsLoaded) return;
+        try {
+          const res = await fetch('/api/databases');
+          const data = await res.json();
+          const names = data.databases || [];
+          // pgAgent по умолчанию живёт в postgres — держим её первой
+          const list = names.includes('postgres') ? names : ['postgres'].concat(names);
+          document.getElementById('pj-filter-db').innerHTML =
+            list.map(n => '<option value="' + this.esc(n) + '">' + this.esc(n) + '</option>').join('');
+          dbsLoaded = true;
+        } catch (e) {
+          /* остаётся опция postgres из разметки */
+        }
+      },
+      async load() {
+        await this.loadDbs();
+        const sel = document.getElementById('pj-filter-db');
+        const db = sel.value || 'postgres';
+        const limit = document.getElementById('pj-limit').value || 200;
+        const st = document.getElementById('pj-status');
+        const tbl = document.getElementById('pj-body').closest('table');
+        st.innerHTML = '<div class="audit-empty">Загрузка...</div>';
+        try {
+          const res = await fetch('/api/pgagent-log?db=' + encodeURIComponent(db) +
+                                  '&limit=' + encodeURIComponent(limit));
+          const data = await res.json();
+          if (data.error) {
+            entries = [];
+            tbl.style.display = 'none';
+            st.innerHTML = '<div class="alert err">' + this.esc(data.error) + '</div>';
+            return;
+          }
+          entries = data.entries || [];
+          this.render();
+        } catch (e) {
+          tbl.style.display = 'none';
+          st.innerHTML = '<div class="alert err">Не удалось загрузить журнал задач: ' + this.esc(e.message) + '</div>';
+        }
+      },
+      filter() {
+        const job = document.getElementById('pj-filter-job').value.toLowerCase();
+        const st = document.getElementById('pj-filter-status').value;
+        return entries.filter(e => {
+          if (st && String(e.status || '') !== st) return false;
+          if (job && !(e.job || '').toLowerCase().includes(job)) return false;
+          return true;
+        });
+      },
+      statusBadge(s) {
+        const cls = { s:'info', f:'warn', d:'danger' };
+        const label = { s:'начат', f:'завершён', d:'прерван' };
+        return '<span class="badge ' + (cls[s] || 'muted') + '" title="jslstatus = ' + this.esc(s) + '">' +
+               (label[s] || this.esc(s) || '-') + '</span>';
+      },
+      resultBadge(r) {
+        if (r === null || r === undefined || r === '') return '<span class="badge muted" title="jslresult не записан">—</span>';
+        if (Number(r) === 0) return '<span class="badge info" title="jslresult = 0">0 · ок</span>';
+        return '<span class="badge danger" title="jslresult = ' + this.esc(r) + '">код ' + this.esc(r) + '</span>';
+      },
+      render() {
+        const rows = this.filter();
+        const body = document.getElementById('pj-body');
+        const tbl = body.closest('table');
+        const st = document.getElementById('pj-status');
+        if (!rows.length) {
+          tbl.style.display = 'none';
+          st.innerHTML = '<div class="audit-empty">Записей нет</div>';
+          return;
+        }
+        tbl.style.display = '';
+        st.innerHTML = '';
+        body.innerHTML = rows.map(e =>
+          '<tr>' +
+            '<td>' + this.esc(e.job) + '</td>' +
+            '<td>' + this.esc(e.step) + '</td>' +
+            '<td>' + this.statusBadge(e.status) + '</td>' +
+            '<td>' + this.resultBadge(e.result) + '</td>' +
+            '<td style="white-space:nowrap">' + this.esc(e.started) + '</td>' +
+            '<td style="white-space:nowrap">' + this.esc(e.finished) + '</td>' +
+            '<td style="max-width:30rem;max-height:7rem;overflow:hidden;white-space:pre-wrap;' +
+                'word-break:break-word;cursor:pointer" data-open="" ' +
+                'title="Клик — развернуть вывод" onclick="PgJobs.toggle(this)">' +
+              this.esc(e.output) + '</td>' +
+          '</tr>'
+        ).join('');
+      },
+      toggle(td) {
+        const open = td.dataset.open === '1';
+        td.dataset.open = open ? '' : '1';
+        td.style.maxHeight = open ? '7rem' : 'none';
+        td.style.overflow = open ? 'hidden' : 'visible';
+        td.title = open ? 'Клик — развернуть вывод' : 'Клик — свернуть вывод';
+      },
+      reload() { this.load(); }
+    };
+  }();
   document.addEventListener('DOMContentLoaded', function() {
     // Секретные поля: при загрузке страницы отключаем input, если галка «не менять» checked
     document.querySelectorAll('input[type="hidden"][id^="keep_"]').forEach(function(keep) {
@@ -283,6 +426,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
       field.disabled = chk.checked;
     });
     Audit.load();
+    PgJobs.load();
   });
   </script>
 </div>
