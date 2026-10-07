@@ -35,6 +35,8 @@ def login():
         password = str(request.form.get("password") or "")
         if check_login(cfg, username, password):
             session["auth"] = True
+            # Kept for the "only mine" filters in the settings UI.
+            session["username"] = username
             session.permanent = True
             # Rotate the CSRF token after authentication (Django-style):
             # prevents session-fixation and gives a clean token.

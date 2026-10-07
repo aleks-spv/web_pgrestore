@@ -139,11 +139,7 @@ def audit_log_view():
 _PGAGENT_SQL = """
 SELECT j.jobname AS job,
        s.jstname AS step,
-       l.jslstatus::text AS status,
-       l.jslresult AS result,
-       {started} AS started,
-       {finished} AS finished,
-       left(l.jsloutput, 20000) AS output
+       {cols}
   FROM pgagent.pga_jobsteplog l
   JOIN pgagent.pga_jobstep s ON s.jstid = l.jsljstid
   JOIN pgagent.pga_job     j ON j.jobid = s.jstjobid
@@ -154,12 +150,12 @@ SELECT j.jobname AS job,
 """
 
 
-def _pgagent_sql(cur):
-    """Build the log query against the columns this pgAgent actually has.
+def _pgagent_columns(cur):
+    """Probe the schema and build the SELECT list, plus `has_end`.
 
-    Time columns are the ones that differ between releases: some installs
-    have no `jslend` at all, and one hard-coded column would make the whole
-    card fail. Probe the schema once, fall back to NULL.
+    `jslend` is missing from some pgAgent releases. Dropping the column then
+    would shift every cell of the table one position left, so the `finished`
+    slot stays and is simply NULL — the UI renders «—» for it.
     """
     cur.execute(
         "SELECT column_name FROM information_schema.columns"
@@ -167,9 +163,21 @@ def _pgagent_sql(cur):
         "   AND table_name = 'pga_jobsteplog'"
     )
     have = {row[0] for row in cur.fetchall()}
-    return _PGAGENT_SQL.format(
-        started="l.jslstart" if "jslstart" in have else "NULL",
-        finished="l.jslend" if "jslend" in have else "NULL",
+
+    started = "l.jslstart AS started" if "jslstart" in have else "NULL AS started"
+    if "jslend" in have:
+        finished = "l.jslend AS finished"
+    else:
+        # No `jslend` in this pgAgent release — keep the column (as NULL) so
+        # the table cells do not shift one position left. The UI then renders
+        # an em dash, because there is nothing to subtract.
+        finished = "NULL AS finished"
+
+    return (
+        "l.jslstatus::text AS status, "
+        "l.jslresult AS result, "
+        f"{started}, {finished}, "
+        "left(l.jsloutput, 20000) AS output"
     )
 
 
@@ -202,9 +210,9 @@ def pgagent_log_view():
         return jsonify({"entries": [], "error": f"Неизвестный статус: {status}"}), 400
 
     try:
-        limit = int(request.args.get("limit") or 200)
+        limit = int(request.args.get("limit") or 10)
     except (TypeError, ValueError):
-        limit = 200
+        limit = 10
     limit = max(1, min(limit, 1000))
 
     cfg = current_app.config["APP_CFG"]
@@ -212,7 +220,8 @@ def pgagent_log_view():
         with closing(get_conn(cfg, dbname="postgres")) as conn:
             conn.autocommit = True
             with closing(conn.cursor()) as cur:
-                sql = _pgagent_sql(cur)   # probes pgagent schema first
+                sql_cols = _pgagent_columns(cur)
+                sql = _PGAGENT_SQL.format(cols=sql_cols)
                 cur.execute(sql, (job, job, status, status, limit))
                 columns = [d[0] for d in cur.description]
                 rows = cur.fetchall()

@@ -9,10 +9,11 @@
 body { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f5f7fa; color: #333; padding: 2rem; }
 h1 { text-align: center; margin-bottom: .4rem; font-size: 1.4rem; color: #1a5276; }
 .sub { text-align: center; color: #666; font-size: .9rem; margin-bottom: 1.2rem; }
-.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; max-width: 760px; margin-left:auto; margin-right:auto; }
+/* Карточки во всю ширину окна — подстраивается под экран. */
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; width: 100%; margin-left:auto; margin-right:auto; }
 .topbar a { color: #2980b9; text-decoration: none; font-size: .9rem; }
 .topbar a:hover { text-decoration: underline; }
-.card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1.5rem; max-width: 760px; margin: 0 auto 1.2rem; }
+.card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1.5rem; width: 100%; max-width: none; margin: 0 auto 1.2rem; }
 section { margin-bottom: 1.4rem; }
 section h2 { font-size: 1rem; color: #2c3e50; margin-bottom: .7rem; border-bottom: 1px solid #ecf0f1; padding-bottom: .35rem; }
 .row { display: grid; grid-template-columns: 220px 1fr; gap: .6rem 1rem; align-items: center; margin-bottom: .55rem; }
@@ -55,7 +56,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   <a href="/logout">Выйти</a>
 </div>
 <h1>Настройки</h1>
-<div class="sub">Управление конфигурацией через <code>.env</code> — без правки файла в консоли</div>
+<div class="sub">Управление конфигурацией через <code>.env</code></div>
 
 <div class="card">
   {% if auth_disabled_banner %}
@@ -211,30 +212,23 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
     <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал заданий postgresql</h2>
     <div class="audit-filters">
       <input type="text" id="pj-filter-job" placeholder="Имя задачи..." oninput="PgJobs.render()" style="min-width:11rem">
-      <select id="pj-filter-status" onchange="PgJobs.render()">
-        <option value="">Все статусы</option>
-        <option value="s">s — начат</option>
-        <option value="f">f — завершён</option>
-        <option value="d">d — прерван</option>
-      </select>
-      <input type="number" id="pj-limit" value="200" min="10" max="1000" step="10" style="width:5.5rem" title="Сколько последних записей загрузить">
+      <label style="font-weight:400;font-size:.85rem;display:flex;align-items:center;gap:.35rem;">
+        <input type="checkbox" id="pj-only-errors" onchange="PgJobs.render()" style="width:auto;margin:0;"> Только ошибки
+      </label>
+      <label style="font-weight:400;font-size:.85rem;display:flex;align-items:center;gap:.35rem;">
+        <input type="checkbox" id="pj-only-mine" onchange="PgJobs.render()" style="width:auto;margin:0;"> Только мои
+      </label>
+      <input type="number" id="pj-limit" value="10" min="10" max="1000" step="10" style="width:5.5rem" title="Сколько последних записей загрузить">
       <button class="ghost" style="padding:.25rem .6rem;font-size:.8rem;" onclick="PgJobs.reload()">Обновить</button>
-    </div>
-    <div class="hint" style="margin-bottom:.4rem">
-      Статусы pgAgent: <code>s</code> — начат, <code>f</code> — завершён, <code>d</code> — прерван.
-      Результат: <code>0</code> — ок, иначе код ошибки, пусто — не записан.
-      Вывод шага обрезается до 20 000 символов (клик по ячейке разворачивает).
     </div>
     <div id="pj-status"></div>
     <table class="audit-table" style="display:none;">
       <thead>
         <tr>
-          <th>Задача</th>
-          <th>Шаг</th>
-          <th>Статус</th>
-          <th>Результат</th>
+          <th>Задача и шаг</th>
           <th>Начало</th>
-          <th>Конец</th>
+          <th>Результат</th>
+          <th>Длительность</th>
           <th>Вывод</th>
         </tr>
       </thead>
@@ -243,6 +237,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
   </div>
 
   <script>
+  const CURRENT_USER = {{ username | default('') | tojson }};
   const Audit = function() {
     let entries = [];
     return {
@@ -318,7 +313,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
       },
       async load() {
         // pgAgent живёт в базе postgres — выбора базы нет, API ходит туда сам.
-        const limit = document.getElementById('pj-limit').value || 200;
+        const limit = document.getElementById('pj-limit').value || 10;
         const st = document.getElementById('pj-status');
         const tbl = document.getElementById('pj-body').closest('table');
         st.innerHTML = '<div class="audit-empty">Загрузка...</div>';
@@ -338,20 +333,45 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
           st.innerHTML = '<div class="alert err">Не удалось загрузить журнал заданий: ' + this.esc(e.message) + '</div>';
         }
       },
+      isErr(e) {
+        // Прерванный шаг — всегда ошибка; иначе ошибка, если код != 0.
+        if (e.status === 'd') return true;
+        const r = e.result;
+        return r !== null && r !== undefined && r !== '' && Number(r) !== 0;
+      },
       filter() {
         const job = document.getElementById('pj-filter-job').value.toLowerCase();
-        const st = document.getElementById('pj-filter-status').value;
+        const onlyErr = document.getElementById('pj-only-errors').checked;
+        const onlyMine = document.getElementById('pj-only-mine').checked;
+        const me = (CURRENT_USER || '').toLowerCase();
         return entries.filter(e => {
-          if (st && String(e.status || '') !== st) return false;
           if (job && !(e.job || '').toLowerCase().includes(job)) return false;
+          if (onlyErr && !this.isErr(e)) return false;
+          if (onlyMine && (!me || !(e.job || '').toLowerCase().includes(me))) return false;
           return true;
         });
       },
-      statusBadge(s) {
-        const cls = { s:'info', f:'warn', d:'danger' };
-        const label = { s:'начат', f:'завершён', d:'прерван' };
-        return '<span class="badge ' + (cls[s] || 'muted') + '" title="jslstatus = ' + this.esc(s) + '">' +
-               (label[s] || this.esc(s) || '-') + '</span>';
+      // pgAgent отдаёт время с таймзоной сервера — показываем в поясе браузера.
+      fmt(s) {
+        if (!s) return '';
+        const raw = String(s).replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1');
+        const d = new Date(raw);
+        if (isNaN(d)) return String(s);
+        const p = n => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+               ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      },
+      // Длительность шага = конец − начало, в поясе браузера. Нет данных — «—».
+      duration(a, b) {
+        if (!a || !b) return '—';
+        const parse = s => new Date(String(s).replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
+        const ms = parse(b) - parse(a);
+        if (!isFinite(ms) || ms < 0) return '—';
+        let s = Math.round(ms / 1000);
+        const h = Math.floor(s / 3600); s -= h * 3600;
+        const m = Math.floor(s / 60); s -= m * 60;
+        const p = n => String(n).padStart(2, '0');
+        return (h ? h + ' ч ' : '') + p(m) + ' мин ' + p(s) + ' с';
       },
       resultBadge(r) {
         if (r === null || r === undefined || r === '') return '<span class="badge muted" title="jslresult не записан">—</span>';
@@ -372,12 +392,10 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
         st.innerHTML = '';
         body.innerHTML = rows.map(e =>
           '<tr>' +
-            '<td>' + this.esc(e.job) + '</td>' +
-            '<td>' + this.esc(e.step) + '</td>' +
-            '<td>' + this.statusBadge(e.status) + '</td>' +
+            '<td>' + this.esc([e.job, e.step].filter(Boolean).join(' · ')) + '</td>' +
+            '<td style="white-space:nowrap">' + this.esc(this.fmt(e.started)) + '</td>' +
             '<td>' + this.resultBadge(e.result) + '</td>' +
-            '<td style="white-space:nowrap">' + this.esc(e.started) + '</td>' +
-            '<td style="white-space:nowrap">' + this.esc(e.finished) + '</td>' +
+            '<td style="white-space:nowrap">' + this.esc(this.duration(e.started, e.finished)) + '</td>' +
             '<td style="max-width:30rem;max-height:7rem;overflow:hidden;white-space:pre-wrap;' +
                 'word-break:break-word;cursor:pointer" data-open="" ' +
                 'title="Клик — развернуть вывод" onclick="PgJobs.toggle(this)">' +
