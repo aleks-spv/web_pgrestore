@@ -324,10 +324,14 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
           const res = await fetch('/api/databases');
           const data = await res.json();
           const names = data.databases || [];
-          // pgAgent по умолчанию живёт в postgres — держим её первой
-          const list = names.includes('postgres') ? names : ['postgres'].concat(names);
-          document.getElementById('pj-filter-db').innerHTML =
+          // pgAgent живёт в postgres — она же обязана быть выбрана по умолчанию.
+          // Иначе <select> сам берёт первую базу из списка, в ней схемы pgagent
+          // нет и API честно отвечает «отношение pgagent.pga_jobsteplog не существует».
+          const list = ['postgres'].concat(names.filter(n => n !== 'postgres'));
+          const sel = document.getElementById('pj-filter-db');
+          sel.innerHTML =
             list.map(n => '<option value="' + this.esc(n) + '">' + this.esc(n) + '</option>').join('');
+          sel.value = 'postgres';
           dbsLoaded = true;
         } catch (e) {
           /* остаётся опция postgres из разметки */
@@ -348,7 +352,11 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
           if (data.error) {
             entries = [];
             tbl.style.display = 'none';
-            st.innerHTML = '<div class="alert err">' + this.esc(data.error) + '</div>';
+            let msg = this.esc(data.error);
+            if (data.error.indexOf('pgagent') !== -1) {
+              msg += '<div class="hint">В этой базе схемы pgAgent нет — выберите в фильтре ту, где он установлен (обычно <code>postgres</code>).</div>';
+            }
+            st.innerHTML = '<div class="alert err">' + msg + '</div>';
             return;
           }
           entries = data.entries || [];
