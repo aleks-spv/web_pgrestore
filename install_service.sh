@@ -140,7 +140,8 @@ fi
 VENV="$APP_DIR/.venv"
 create_venv() { python3 -m venv "$VENV" >/dev/null 2>&1; }
 
-if [ ! -x "$VENV/bin/python" ]; then
+if [ ! -x "$VENV/bin/python" ] || ! "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+    [ -d "$VENV" ] && { echo "Удаляю неполный/сломанный venv"; rm -rf "$VENV"; }
     if ! create_venv; then
         # На Debian/Ubuntu нет python3-venv (ensurepip) — ставим сами
         if command -v apt-get >/dev/null 2>&1; then
