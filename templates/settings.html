@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Настройки — PostgreSQL 1C Safe Restore</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f5f7fa; color: #333; padding: 2rem; }
+h1 { text-align: center; margin-bottom: .4rem; font-size: 1.4rem; color: #1a5276; }
+.sub { text-align: center; color: #666; font-size: .9rem; margin-bottom: 1.2rem; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; max-width: 760px; margin-left:auto; margin-right:auto; }
+.topbar a { color: #2980b9; text-decoration: none; font-size: .9rem; }
+.topbar a:hover { text-decoration: underline; }
+.card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1.5rem; max-width: 760px; margin: 0 auto 1.2rem; }
+section { margin-bottom: 1.4rem; }
+section h2 { font-size: 1rem; color: #2c3e50; margin-bottom: .7rem; border-bottom: 1px solid #ecf0f1; padding-bottom: .35rem; }
+.row { display: grid; grid-template-columns: 220px 1fr; gap: .6rem 1rem; align-items: center; margin-bottom: .55rem; }
+label { font-weight: 600; font-size: .85rem; }
+label small { display:block; font-weight:400; color:#7f8c8d; font-size:.75rem; }
+input[type=text], input[type=number], input[type=password] {
+  width: 100%; padding: .45rem .6rem; border: 1px solid #bdc3c7; border-radius: 5px; font-size: .92rem;
+}
+select { width:100%; padding:.45rem .6rem; border:1px solid #bdc3c7; border-radius:5px; }
+.hint { font-size: .78rem; color: #7f8c8d; margin-top: .15rem; }
+.actions { display:flex; gap:.8rem; align-items:center; margin-top:1rem; }
+button.primary { border:none; cursor:pointer; font-weight:600; background:#2980b9; color:#fff; border-radius:5px; padding:.65rem 1.2rem; }
+button.primary:hover { background:#1f6fa5; }
+button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-radius:5px; padding:.6rem 1rem; cursor:pointer; text-decoration:none; display:inline-block; font-size:.9rem; }
+.alert { padding: .75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
+.alert.ok { background:#e8f8f0; color:#1e8449; border:1px solid #a9dfbf; }
+.alert.err { background:#fdecea; color:#c0392b; border:1px solid #f5b7b1; }
+.alert.warn { background:#fef9e7; color:#9a7d0a; border:1px solid #f9e79f; }
+  .envpath { font-family: Consolas, monospace; font-size: .8rem; color:#555; margin-top:.6rem; }
+  .audit-section { margin-top: 2rem; }
+  .audit-table { width:100%; border-collapse: collapse; font-size: .82rem; margin-top: .5rem; }
+  .audit-table th, .audit-table td { border: 1px solid #ecf0f1; padding: .4rem .5rem; text-align: left; vertical-align: top; }
+  .audit-table th { background: #2c3e50; color: #fff; font-weight: 600; }
+  .audit-table tr:nth-child(even) { background: #f8f9fa; }
+  .badge { display:inline-block; font-size:.72rem; padding:.1rem .45rem; border-radius:999px; }
+  .badge.info { background:#d6eaf8; color:#2980b9; }
+  .badge.warn { background:#fdebd0; color:#b9770e; }
+  .badge.danger { background:#fdecea; color:#c0392b; }
+  .badge.muted { background:#ecf0f1; color:#7f8c8d; }
+  .audit-empty { text-align:center; color:#7f8c8d; padding:1rem; font-size:.9rem; }
+  .audit-filters { display:flex; gap:.5rem; margin-bottom:.5rem; align-items:center; flex-wrap:wrap; }
+  .audit-filters select, .audit-filters input { padding:.3rem .5rem; border:1px solid #bdc3c7; border-radius:4px; font-size:.82rem; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a href="/">← К восстановлению</a>
+  <a href="#audit-log-anchor">Журнал audit</a>
+  <a href="/logout">Выйти</a>
+</div>
+<h1>Настройки</h1>
+<div class="sub">Управление конфигурацией через <code>.env</code> — без правки файла в консоли</div>
+
+<div class="card">
+  {% if auth_disabled_banner %}
+  <div class="alert warn">⚠️ Авторизация выключена (AUTH_USER/AUTH_PASS пустые). Любой, кто достучится до порта, сможет редактировать настройки и восстанавливать базы.</div>
+  {% endif %}
+  {% if error %}
+  <div class="alert err">{{ error }}</div>
+  {% endif %}
+  {% if saved %}
+  <div class="alert ok">✅ Сохранено в <code>.env</code>. Изменения: {{ changed | join(', ') }}. Часть параметров (хост/порт/прокси) применится после перезапуска сервиса.</div>
+  {% endif %}
+
+  <form method="post" action="/settings">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+    <section>
+      <h2>PostgreSQL</h2>
+      {% for key in ['PGHOST','PGPORT','PGUSER','PGPASSWORD','PGPRO_BIN_DIR'] %}
+      {% set v = view[key] %}
+      <div class="row">
+        <label for="f_{{ key }}">{{ key }}{% if key == 'PGPASSWORD' %} <small>пароль БД</small>{% elif key == 'PGPRO_BIN_DIR' %} <small>каталог pg_restore</small>{% endif %}</label>
+        <div>
+          {% if v.is_secret %}
+          <input id="f_{{ key }}" name="{{ key }}" type="password" autocomplete="new-password"
+                 placeholder="{% if v.set %}•••••••• (не менять){% else %}не задан{% endif %}">
+          <input type="hidden" name="_{{ key }}_keep" value="1" id="keep_{{ key }}">
+          <div class="hint">Чтобы изменить или очистить значение, снимите галку «не менять», удалите текст и введите новое значение (или <code>{{ secret_clear }}</code> для очистки).</div>
+          <label style="font-weight:400;display:block;margin-top:.25rem">
+            <input type="checkbox" id="chk_{{ key }}" onchange="document.getElementById('keep_{{ key }}').value=this.checked?'1':'0'; document.getElementById('f_{{ key }}').disabled=this.checked;">
+            не менять (текущее значение сохранится)
+          </label>
+          {% else %}
+          <input id="f_{{ key }}" name="{{ key }}" type="{% if v.is_int %}number{% else %}text{% endif %}" value="{{ v.value }}">
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <section>
+      <h2>Бэкапы</h2>
+      {% for key in ['BACKUP_ROOT','DEFAULT_OWNER'] %}
+      {% set v = view[key] %}
+      <div class="row">
+        <label for="f_{{ key }}">{{ key }}</label>
+        <div><input id="f_{{ key }}" name="{{ key }}" type="text" value="{{ v.value }}"></div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <section>
+      <h2>Авторизация</h2>
+      {% for key in ['AUTH_USER','AUTH_PASS'] %}
+      {% set v = view[key] %}
+      <div class="row">
+        <label for="f_{{ key }}">{{ key }}</label>
+        <div>
+          {% if v.is_secret %}
+          <input id="f_{{ key }}" name="{{ key }}" type="password" autocomplete="new-password"
+                 placeholder="{% if v.set %}•••••••• (не менять){% else %}пусто = auth выкл{% endif %}">
+          <input type="hidden" name="_{{ key }}_keep" value="1" id="keep_{{ key }}">
+          <label style="font-weight:400;display:block;margin-top:.25rem">
+            <input type="checkbox" id="chk_{{ key }}" checked onchange="document.getElementById('keep_{{ key }}').value=this.checked?'1':'0'; document.getElementById('f_{{ key }}').disabled=this.checked;">
+            не менять
+          </label>
+          <div class="hint">Очистка: снимите галку, удалите текст и введите <code>{{ secret_clear }}</code></div>
+          {% else %}
+          <input id="f_{{ key }}" name="{{ key }}" type="text" value="{{ v.value }}">
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      <div class="row">
+        <label for="f_FLASK_SECRET_KEY">FLASK_SECRET_KEY <small>секрет сессий</small></label>
+        <div>
+          <input id="f_FLASK_SECRET_KEY" name="FLASK_SECRET_KEY" type="password" autocomplete="new-password"
+                 placeholder="{% if view['FLASK_SECRET_KEY'].set %}•••••••• (не менять){% else %}пусто = сгенерировать при старте{% endif %}">
+          <input type="hidden" name="_FLASK_SECRET_KEY_keep" value="1" id="keep_FLASK_SECRET_KEY">
+          <div class="hint">Чтобы изменить, снимите галку «не менять», удалите текст и введите новый ключ.</div>
+          <label style="font-weight:400;display:block;margin-top:.25rem">
+            <input type="checkbox" id="chk_FLASK_SECRET_KEY" checked onchange="document.getElementById('keep_FLASK_SECRET_KEY').value=this.checked?'1':'0'; document.getElementById('f_FLASK_SECRET_KEY').disabled=this.checked;">
+            не менять
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Сервер и лимиты</h2>
+      {% for key in ['APP_HOST','APP_PORT','SUBPROCESS_TIMEOUT','PGPRO_PARALLEL','MAX_CONCURRENT_RESTORES'] %}
+      {% set v = view[key] %}
+      <div class="row">
+        <label for="f_{{ key }}">{{ key }}{% if key == 'SUBPROCESS_TIMEOUT' %} <small>сек, 0 = без лимита</small>{% elif key == 'MAX_CONCURRENT_RESTORES' %} <small>параллельных restore</small>{% endif %}</label>
+        <div><input id="f_{{ key }}" name="{{ key }}" type="{% if v.is_int %}number{% else %}text{% endif %}" value="{{ v.value }}"></div>
+      </div>
+      {% endfor %}
+
+      {% for key in ['TRUST_PROXY','ALLOW_UNAUTHENTICATED','SESSION_COOKIE_SECURE'] %}
+      {% set v = view[key] %}
+      <div class="row">
+        <label for="f_{{ key }}">{{ key }}
+          <small>{% if key == 'TRUST_PROXY' %}доверять X-Forwarded-* (только за nginx){% elif key == 'ALLOW_UNAUTHENTICATED' %}явно разрешить запуск без auth вне loopback{% else %}Secure cookie за HTTPS{% endif %}</small>
+        </label>
+        <div>
+          <select id="f_{{ key }}" name="{{ key }}">
+            <option value="0" {% if v.value == '0' %}selected{% endif %}>нет (0)</option>
+            <option value="1" {% if v.value == '1' %}selected{% endif %}>да (1)</option>
+          </select>
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <div class="actions">
+      <button class="primary" type="submit">Сохранить в .env</button>
+      <a class="ghost" href="/">Отмена</a>
+    </div>
+    <div class="envpath">Файл: <code>{{ env_path }}</code></div>
+  </form>
+
+  <div class="card audit-section" id="audit-log-anchor">
+    <h2 style="font-size:1rem;color:#2c3e50;margin-bottom:.7rem;border-bottom:1px solid #ecf0f1;padding-bottom:.35rem;">Журнал audit (только чтение)</h2>
+    <div class="audit-filters">
+      <select id="audit-filter-level" onchange="Audit.render()">
+        <option value="">Все уровни</option>
+        <option value="INFO">INFO</option>
+        <option value="WARNING">WARNING</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+      <input type="text" id="audit-filter-db" placeholder="База данных..." oninput="Audit.render()">
+      <button class="ghost" style="padding:.25rem .6rem;font-size:.8rem;" onclick="Audit.reload()">Обновить</button>
+    </div>
+    <div id="audit-status"></div>
+    <table class="audit-table" style="display:none;">
+      <thead>
+        <tr>
+          <th>Время</th>
+          <th>Уровень</th>
+          <th>Событие</th>
+          <th>Целевая БД</th>
+          <th>Источник</th>
+          <th>Бэкап</th>
+          <th>IP</th>
+          <th>Результат</th>
+          <th>Ошибка</th>
+        </tr>
+      </thead>
+      <tbody id="audit-body"></tbody>
+    </table>
+  </div>
+
+  <script>
+  const Audit = function() {
+    let entries = [];
+    return {
+      async load() {
+        try {
+          const res = await fetch('/api/audit-log');
+          const data = await res.json();
+          entries = data.entries || [];
+          this.render();
+        } catch (e) {
+          document.getElementById('audit-status').innerHTML =
+            '<div class="alert err">Не удалось загрузить журнал audit: ' + e.message + '</div>';
+        }
+      },
+      filter() {
+        const level = document.getElementById('audit-filter-level').value;
+        const db = document.getElementById('audit-filter-db').value.toLowerCase();
+        return entries.filter(e => {
+          if (level && e.level !== level) return false;
+          if (db && !(e.target_db || '').toLowerCase().includes(db)) return false;
+          return true;
+        });
+      },
+      badge(kind) {
+        const map = { INFO:'info', WARNING:'warn', ERROR:'danger' };
+        return '<span class="badge ' + (map[kind]||'muted') + '">' + (kind||'-') + '</span>';
+      },
+      resultBadge(ok) {
+        if (ok === true) return '<span class="badge info">успех</span>';
+        if (ok === false) return '<span class="badge danger">ошибка</span>';
+        return '<span class="badge muted">-</span>';
+      },
+      esc(s) {
+        if (s == null) return '';
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      },
+      render() {
+        const rows = this.filter();
+        const body = document.getElementById('audit-body');
+        const tbl = body.closest('table');
+        if (!rows.length) {
+          tbl.style.display = 'none';
+          var st = document.getElementById('audit-status');
+          st.innerHTML = '<div class="audit-empty">Записей нет</div>';
+          return;
+        }
+        tbl.style.display = '';
+        document.getElementById('audit-status').innerHTML = '';
+        body.innerHTML = rows.map(e =>
+          '<tr>' +
+            '<td>' + this.esc(e.ts) + '</td>' +
+            '<td>' + this.badge(e.level) + '</td>' +
+            '<td>' + this.esc(e.event) + '</td>' +
+            '<td>' + this.esc(e.target_db) + '</td>' +
+            '<td>' + this.esc(e.source_db) + '</td>' +
+            '<td>' + this.esc(e.backup_file) + '</td>' +
+            '<td>' + this.esc(e.ip) + '</td>' +
+            '<td>' + this.resultBadge(e.ok) + '</td>' +
+            '<td>' + this.esc(e.error) + '</td>' +
+          '</tr>'
+        ).join('');
+      },
+      reload() { this.load(); }
+    };
+  }();
+  document.addEventListener('DOMContentLoaded', function() {
+    // Секретные поля: при загрузке страницы отключаем input, если галка «не менять» checked
+    document.querySelectorAll('input[type="hidden"][id^="keep_"]').forEach(function(keep) {
+      var key = keep.id.slice(5); // 'keep_'
+      var chk = document.getElementById('chk_' + key);
+      var field = document.getElementById('f_' + key);
+      if (!chk || !field) return;
+      keep.value = chk.checked ? '1' : '0';
+      field.disabled = chk.checked;
+    });
+    Audit.load();
+  });
+  </script>
+</div>
+</body>
+</html>

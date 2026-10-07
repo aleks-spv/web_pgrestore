@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL 1C Safe Restore — Login</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         background: #f5f7fa; color: #333; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .card { background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.12);
+          padding: 2.5rem 2rem; width: 100%; max-width: 380px; }
+  h1 { text-align: center; margin-bottom: 1.5rem; font-size: 1.3rem; color: #1a5276; }
+  label { display: block; font-weight: 600; margin-bottom: .3rem; font-size: .85rem; }
+  input { font-size: .95rem; padding: .55rem .8rem; border-radius: 5px;
+          border: 1px solid #bdc3c7; width: 100%; margin-bottom: .8rem; }
+  button { border: none; cursor: pointer; font-weight: 600; font-size: 1rem;
+           background: #2980b9; color: #fff; border-radius: 5px; padding: .65rem;
+           width: 100%; transition: background .15s; }
+  button:hover { background: #1f6fa5; }
+  .err { color: #c0392b; font-size: .82rem; margin-bottom: .8rem; text-align: center;
+         background: #fdecea; padding: .5rem; border-radius: 5px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>PostgreSQL 1C Safe Restore</h1>
+  {% if error %}
+  <div class="err">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label for="username">Логин</label>
+    <input id="username" name="username" type="text" autofocus autocomplete="username">
+
+    <label for="password">Пароль</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+
+    <button type="submit">Войти</button>
+  </form>
+</div>
+
+</body>
+</html>

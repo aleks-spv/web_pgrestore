@@ -1,0 +1,21 @@
+# Local env & secrets
+.env
+
+# Logs / artifacts
+restore_audit.log
+*.pyc
+__pycache__/
+.ruff_cache/
+.pytest_cache/
+
+# Agent / editor dirs
+.omo/
+.OMO/
+.opencode/
+.codegraph
+
+# Reference script (optional local copy)
+AGENTS.md
+
+# Cache
+.ruff_cache

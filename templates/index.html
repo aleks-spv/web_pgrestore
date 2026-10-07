@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL 1C Safe Restore</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f5f7fa; color: #333; padding: 2rem; }
+h1 { text-align: center; margin-bottom: 1.5rem; font-size: 1.6rem; color: #1a5276; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.2rem; }
+.topbar a { font-size: .85rem; color: #2980b9; text-decoration: none; }
+.topbar a:hover { text-decoration: underline; }
+h2 { font-size: 1.1rem; margin-bottom: .6rem; color: #2c3e50; }
+.card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1.5rem; margin-bottom: 1.2rem; }
+label { display: block; font-weight: 600; margin-bottom: .3rem; font-size: .9rem; }
+select, button, input { font-size: .95rem; padding: .55rem .8rem; border-radius: 5px; border: 1px solid #bdc3c7; width: 100%; margin-bottom: .6rem; }
+select { cursor: pointer; background: #fff; }
+button { border: none; cursor: pointer; font-weight: 600; background: #2980b9; color: #fff; transition: background .15s; }
+button:hover { background: #1f6fa5; }
+button:disabled { background: #a0b8cc; cursor: not-allowed; }
+button#btn-restore { background: #c0392b; font-size: 1.05rem; padding: .7rem 1rem; }
+button#btn-restore:hover { background: #a93226; }
+button#btn-restore:disabled { background: #e09a92; }
+.radio-row { display: flex; gap: 1.2rem; margin-bottom: .6rem; font-size: .92rem; }
+.radio-row label { display: inline-flex; align-items: center; gap: .35rem; font-weight: 500; cursor: pointer; }
+.radio-row input { width: auto; margin: 0; }
+#source-db-div { display: none; }
+.hint { font-size: .82rem; color: #7f8c8d; margin-bottom: .6rem; }
+.hint.warn { color: #c0392b; font-weight: 600; }
+#result { margin-top: 1rem; white-space: pre-wrap; font-family: Consolas, monospace; font-size: .88rem; background: #1e1e1e; color: #dcdcdc; padding: 1rem; border-radius: 6px; display: none; min-height: 80px; max-height: 420px; overflow: auto; }
+#result.error { color: #ff6b6b; }
+#result.success { color: #7dcea0; }
+#result.running { color: #f7dc6f; }
+.banner { background: #fdecea; color: #c0392b; border: 1px solid #f5b7b1; border-radius: 6px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .88rem; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; margin-right: .35rem; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.status-pill { display: inline-block; font-size: .78rem; padding: .15rem .55rem; border-radius: 999px; background: #ecf0f1; color: #555; margin-left: .5rem; }
+.status-pill.run { background: #fdebd0; color: #b9770e; }
+.status-pill.ok { background: #e8f8f0; color: #1e8449; }
+.status-pill.fail { background: #fdecea; color: #c0392b; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span></span>
+  <span>
+    <a href="/settings#audit-log-anchor">Журнал audit</a>
+    &nbsp;·&nbsp;
+    <a href="/settings">⚙ Настройки</a>
+    &nbsp;·&nbsp;
+    <a href="/logout">Выйти</a>
+  </span>
+</div>
+
+<h1>PostgreSQL 1C Safe Restore</h1>
+
+{% if auth_disabled_banner %}
+<div class="banner">⚠️ Авторизация выключена. Приложение доступно без логина — включите AUTH_USER/AUTH_PASS в Настройках, если порт виден из сети.</div>
+{% endif %}
+
+<!-- Target DB -->
+<div class="card">
+  <h2>1. Целевая база</h2>
+  <label for="sel-db">База данных</label>
+  <select id="sel-db">
+    <option value="">— загрузка —</option>
+  </select>
+</div>
+
+<!-- Source -->
+<div class="card">
+  <h2>2. Источник бэкапа</h2>
+  <div class="radio-row">
+    <label><input type="radio" name="source-choice" value="same" checked> Из каталога этой же базы</label>
+    <label><input type="radio" name="source-choice" value="other"> Из другой базы</label>
+  </div>
+  <div id="source-db-div">
+    <label for="sel-source-db">Исходная база</label>
+    <select id="sel-source-db">
+      <option value="">— выберите базу —</option>
+    </select>
+  </div>
+</div>
+
+<!-- Backup -->
+<div class="card">
+  <h2>3. Бэкап</h2>
+  <label for="sel-backup">Файл дампа</label>
+  <select id="sel-backup">
+    <option value="">— сначала выберите базу —</option>
+  </select>
+  <button id="btn-restore" disabled>Восстановить базу</button>
+  <div class="hint warn">⚠️ Текущая база будет ПОЛНОСТЬЮ удалена перед восстановлением.</div>
+  <div class="hint" id="backup-path-display"></div>
+</div>
+
+<!-- Results -->
+<div class="card">
+  <h2>Журнал восстановления <span class="status-pill" id="status-pill" style="display:none"></span></h2>
+  <div id="result"></div>
+</div>
+
+<script>
+const CSRF = {{ csrf_token | tojson }};
+const selDb = document.getElementById('sel-db');
+const selBackup = document.getElementById('sel-backup');
+const btnRestore = document.getElementById('btn-restore');
+const resultEl = document.getElementById('result');
+const statusPill = document.getElementById('status-pill');
+const sourceChoice = document.querySelectorAll('input[name="source-choice"]');
+const sourceDbDiv = document.getElementById('source-db-div');
+const selSourceDb = document.getElementById('sel-source-db');
+let eventSource = null;
+
+function showStatus(kind, text) {
+  statusPill.style.display = 'inline-block';
+  statusPill.className = 'status-pill ' + kind;
+  statusPill.textContent = text;
+}
+
+function showError(msg) {
+  resultEl.style.display = 'block';
+  resultEl.className = 'error';
+  resultEl.textContent = msg;
+  showStatus('fail', 'ошибка');
+}
+
+function appendLog(line) {
+  resultEl.style.display = 'block';
+  if (resultEl.className !== 'running') resultEl.className = 'running';
+  resultEl.textContent += line + '\n';
+  resultEl.scrollTop = resultEl.scrollHeight;
+}
+
+function selChoiceChecked(val) {
+  return Array.from(sourceChoice).some(rb => rb.checked && rb.value === val);
+}
+
+async function fetchJson(url, options) {
+  const opts = options || {};
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.method && opts.method !== 'GET') {
+    headers['X-CSRF-Token'] = CSRF;
+  }
+  const res = await fetch(url, Object.assign({}, opts, { headers: headers }));
+  if (res.status === 401) {
+    document.location = '/login';
+    throw new Error('Unauthorized');
+  }
+  return res;
+}
+
+async function loadDatabases() {
+  try {
+    const res = await fetchJson('/api/databases');
+    const data = await res.json();
+    selDb.innerHTML = '';
+    selSourceDb.innerHTML = '<option value="">— выберите базу —</option>';
+    if (data.error) {
+      showError(data.error);
+      return;
+    }
+    const dbs = data.databases || [];
+    if (!dbs.length) {
+      selDb.innerHTML = '<option value="">Нет баз</option>';
+      return;
+    }
+    selDb.innerHTML = '<option value="">— выберите базу —</option>';
+    dbs.forEach(db => {
+      const opt = document.createElement('option');
+      opt.value = db;
+      opt.textContent = db;
+      selDb.appendChild(opt);
+      const optSrc = document.createElement('option');
+      optSrc.value = db;
+      optSrc.textContent = db;
+      selSourceDb.appendChild(optSrc);
+    });
+  } catch (e) {
+    if (e.message !== 'Unauthorized') {
+      showError('Не удалось загрузить список баз: ' + e.message);
+    }
+  }
+}
+
+async function loadBackups(db) {
+  if (!db) {
+    selBackup.innerHTML = '<option value="">— выберите базу —</option>';
+    btnRestore.disabled = true;
+    return;
+  }
+  selBackup.innerHTML = '<option value="">Загрузка …</option>';
+  btnRestore.disabled = true;
+  try {
+    const res = await fetchJson('/api/backups?db=' + encodeURIComponent(db));
+    const data = await res.json();
+    selBackup.innerHTML = '';
+    const backups = data.backups || [];
+    if (!backups.length) {
+      selBackup.innerHTML = '<option value="">Нет бэкапов</option>';
+      return;
+    }
+    backups.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = f;
+      selBackup.appendChild(opt);
+    });
+  } catch (e) {
+    if (e.message !== 'Unauthorized') {
+      showError('Ошибка загрузки бэкапов: ' + e.message);
+    }
+    selBackup.innerHTML = '<option value="">Ошибка</option>';
+  }
+}
+
+sourceChoice.forEach(rb => {
+  rb.addEventListener('change', () => {
+    if (rb.value === 'other') {
+      sourceDbDiv.style.display = 'block';
+      if (selSourceDb.value) loadBackups(selSourceDb.value);
+    } else {
+      sourceDbDiv.style.display = 'none';
+      if (selDb.value) loadBackups(selDb.value);
+    }
+  });
+});
+
+selSourceDb.addEventListener('change', () => {
+  if (selSourceDb.value) loadBackups(selSourceDb.value);
+});
+
+selDb.addEventListener('change', () => {
+  if (selChoiceChecked('same')) loadBackups(selDb.value);
+});
+
+selBackup.addEventListener('change', () => {
+  btnRestore.disabled = !selBackup.value;
+  document.getElementById('backup-path-display').textContent =
+    selBackup.value ? 'Файл: ' + selBackup.value : '';
+});
+
+function closeEventSource() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+}
+
+async function runRestore() {
+  const db = selDb.value;
+  const backup = selBackup.value;
+  const source = selChoiceChecked('other') ? selSourceDb.value : db;
+  if (!db || !backup) return;
+
+  const ok = confirm(
+    'ВНИМАНИЕ: База "' + db + '" будет полностью удалена и восстановлена из бэкапа.\n\n' +
+    'Источник: ' + source + '\nФайл: ' + backup + '\n\nПродолжить?'
+  );
+  if (!ok) return;
+
+  closeEventSource();
+  btnRestore.disabled = true;
+  btnRestore.innerHTML = '<span class="spinner"></span> Восстановление…';
+  resultEl.style.display = 'block';
+  resultEl.className = 'running';
+  resultEl.textContent = 'Запуск job…\n';
+  showStatus('run', 'выполняется');
+
+  try {
+    const res = await fetchJson('/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dbname: db, backup, source_db: source, _csrf: CSRF })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      showError(data.error || ('HTTP ' + res.status));
+      btnRestore.disabled = false;
+      btnRestore.textContent = 'Восстановить базу';
+      return;
+    }
+
+    const progressUrl = data.progress_url;
+    resultEl.textContent = 'Job ' + data.job_id + ' запущен. Подключение к прогрессу…\n';
+    eventSource = new EventSource(progressUrl);
+
+    eventSource.addEventListener('log', (ev) => {
+      try {
+        const payload = JSON.parse(ev.data);
+        appendLog(payload.line || '');
+      } catch (_) {}
+    });
+
+    eventSource.addEventListener('done', (ev) => {
+      closeEventSource();
+      let payload = {};
+      try { payload = JSON.parse(ev.data); } catch (_) {}
+      const okJob = !!payload.ok;
+      resultEl.className = okJob ? 'success' : 'error';
+      showStatus(okJob ? 'ok' : 'fail', okJob ? 'успех' : 'ошибка');
+      const summary =
+        '\n———\n' +
+        'Статус: ' + (payload.status || (okJob ? 'success' : 'failed')) + '\n' +
+        (payload.owner ? 'Owner: ' + payload.owner + '\n' : '') +
+        (payload.terminated !== undefined ? 'Терминировано соединений: ' + payload.terminated + '\n' : '') +
+        (payload.exit_code !== undefined ? 'pg_restore exit: ' + payload.exit_code + '\n' : '') +
+        (payload.database_state ? 'Состояние БД: ' + payload.database_state + '\n' : '') +
+        (payload.error ? 'Ошибка: ' + payload.error + '\n' : '');
+      resultEl.textContent += summary;
+      resultEl.scrollTop = resultEl.scrollHeight;
+      btnRestore.disabled = false;
+      btnRestore.textContent = 'Восстановить базу';
+      loadDatabases();
+    });
+
+    eventSource.onerror = () => {
+      // EventSource retries automatically; if job already done we may get done first.
+      if (!eventSource) return;
+    };
+  } catch (e) {
+    if (e.message !== 'Unauthorized') {
+      showError('Ошибка запуска: ' + e.message);
+    }
+    btnRestore.disabled = false;
+    btnRestore.textContent = 'Восстановить базу';
+  }
+}
+
+btnRestore.addEventListener('click', runRestore);
+loadDatabases();
+</script>
+</body>
+</html>
