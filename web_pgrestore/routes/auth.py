@@ -24,7 +24,9 @@ auth_bp = Blueprint("auth", __name__)
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
-@rate_limited(max_calls=10, period=900)
+# Only POST is counted: opening/refreshing the page must not lock the form.
+# On overflow a browser gets the rendered page, not a bare JSON body.
+@rate_limited(max_calls=10, period=900, methods=("POST",), html_template="login.html")
 def login():
     cfg = current_app.config["APP_CFG"]
     need_auth = cfg.auth_enabled

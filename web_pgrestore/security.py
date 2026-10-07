@@ -263,12 +263,25 @@ def login_required_api():
     and logout just clears the session (idempotent even if unauthenticated).
     /health is public too — monitoring (systemd/nginx checks) must work
     regardless of auth state.
+    /favicon.ico is public too: otherwise it answers with a 302 to /login,
+    which both rotates the CSRF token and counts against the /login rate
+    limit (that is where the phantom `GET /login 429` came from).
     """
     if session_valid():
         return None
+    # Drop everything BUT the CSRF token. Clearing the whole session here made
+    # get_csrf_token() mint a brand-new token on every unauthenticated
+    # response, and after_request mirrors it into _csrf_token — so any stray
+    # request between opening the login form and submitting it left the page
+    # holding a token the server no longer knew: 400.
+    # Rotation still happens where it is wanted: login and logout both call
+    # rotate_csrf_token().
+    csrf = session.get("_csrf")
     session.clear()
+    if csrf:
+        session["_csrf"] = csrf
     path = request.path
-    if path in {"/login", "/logout", "/health"}:
+    if path in {"/login", "/logout", "/health", "/favicon.ico"}:
         return None
     if path.startswith("/api/") or path.startswith("/restore") or path.startswith("/settings"):
         return jsonify({"error": "Unauthorized"}), 401
@@ -325,8 +338,21 @@ def register_security(app) -> None:
 # ---------- Rate limiting (in-memory, pruned) ----------
 
 
-def rate_limited(max_calls: int = 5, period: int = 60):
-    """Simple per-IP rate limit with periodic prune of stale keys."""
+def rate_limited(
+    max_calls: int = 5,
+    period: int = 60,
+    methods: tuple[str, ...] | None = None,
+    html_template: str | None = None,
+):
+    """Simple per-IP rate limit with periodic prune of stale keys.
+
+    methods — only these HTTP methods are counted and checked. A browser page
+        must not lock a user out just by being opened: GET stays out of the
+        counter so 10 refreshes of /login cannot beat 10 real login attempts.
+    html_template — render this template (with `error=`) for a navigation
+        request instead of a bare JSON body, so a real browser gets a page it
+        can act on. JSON/HTML is chosen the same way auth.login does it.
+    """
 
     call_history: dict[str, list[float]] = {}
 
@@ -338,6 +364,8 @@ def rate_limited(max_calls: int = 5, period: int = 60):
                     return func(*args, **kwargs)
             except Exception:
                 pass
+            if methods is not None and request.method.upper() not in methods:
+                return func(*args, **kwargs)
             ip = request.remote_addr or "unknown"
             now = time.time()
             if len(call_history) > 512:
@@ -347,6 +375,19 @@ def rate_limited(max_calls: int = 5, period: int = 60):
                         del call_history[key]
             timestamps = [t for t in call_history.get(ip, []) if now - t < period]
             if len(timestamps) >= max_calls:
+                wants_html = (
+                    html_template
+                    and not request.is_json
+                    and request.accept_mimetypes.best != "application/json"
+                )
+                if wants_html:
+                    return (
+                        render_template(
+                            html_template,
+                            error="Слишком много попыток. Подождите пару минут.",
+                        ),
+                        429,
+                    )
                 return jsonify({"error": "Rate limit exceeded. Try later."}), 429
             timestamps.append(now)
             call_history[ip] = timestamps

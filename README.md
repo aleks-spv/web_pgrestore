@@ -144,7 +144,7 @@ requirements.txt
 - `AUTH_USER`/`AUTH_PASS` заданы → все страницы и API требуют сессию.
 - API без сессии → **401 JSON** (фронтенд сам редиректит на `/login`).
 - HTML-страницы без сессии → **302** на `/login`.
-- Rate-limit на логин: 10 попыток за 15 минут.
+- Rate-limit на логин: **10 POST** за 15 минут — загрузка/обновление страницы не считается.
 - Время жизни сессии: 3600 с; `SameSite=Lax`.
 
 ### Настройки (`/settings`)
@@ -171,8 +171,9 @@ requirements.txt
 | Маршрут | Метод | Описание |
 |---|---|---|
 | `/health` | GET | `{"status":"ok"}` |
-| `/login` | GET/POST | Авторизация (CSRF, rate-limit 10/15min) |
+| `/login` | GET/POST | Авторизация (CSRF, rate-limit 10 POST/15min) |
 | `/logout` | GET | Очистка сессии |
+| `/favicon.ico` | GET | SVG-заглушка (статика отключена: `static_folder=None`) |
 | `/` | GET | UI: выбор БД → бэкап → restore |
 | `/settings` | GET/POST | Просмотр/сохранение allowlisted ключей в `.env` |
 | `/api/databases` | GET | Список не-шаблонных БД |
@@ -214,7 +215,8 @@ curl -s -b /tmp/cj http://127.0.0.1:5000/restore/jobs/<job_id>
 - `400` — невалидный JSON, bad dbname, backup вне `BACKUP_ROOT`, нет CSRF;
 - `401` — нет сессии (API);
 - `409` — restore для этой БД уже идёт (per-DB lock);
-- `429` — rate-limit;
+- `429` — rate-limit; на `/login` браузер получает **HTML** с формой и текстом
+  «Слишком много попыток», JSON-клиенты — JSON;
 - `500` — сбой terminate/drop/create/restore (в ответе `step` + `error`).
 
 ---
@@ -260,7 +262,7 @@ POST /restore
 | API без сессии | **401 JSON**, а не HTML-redirect |
 | Path traversal | `realpath` + containment через `os.sep` (ловит `dump_evil`) |
 | SQL injection | `psycopg2.sql.Identifier` + параметры; `shell=False` |
-| Rate-limit | in-memory per-IP; `RATE_LIMIT_ENABLED=0` только для тестов |
+| Rate-limit | in-memory per-IP; на `/login` считаются только POST; `RATE_LIMIT_ENABLED=0` только для тестов |
 | ProxyFix | **только** при `TRUST_PROXY=1` (иначе spoofed XFF обходит лимиты) |
 | Session | `SameSite=Lax`, lifetime 1 ч; `SESSION_COOKIE_SECURE` за HTTPS |
 | Audit | `restore_audit.log`, в логах **только basename** путей |
@@ -395,7 +397,7 @@ python3 -m unittest tests.test_security tests.test_smoke -v
 | «Файл бэкапа не принадлежит источнику» | backup вне `BACKUP_ROOT/<source_db>/` |
 | `pg_restore: command not found` | `PGPRO_BIN_DIR` или PATH |
 | auth-off старт падает | задайте auth **или** `ALLOW_UNAUTHENTICATED=1` |
-| rate-limit «слишком часто» | смотрите nginx `limit_req`; не трогайте `RATE_LIMIT_ENABLED` в проде |
+| rate-limit «слишком часто» | на `/login` в счётчике только POST (страницу можно открывать сколько угодно); глубже — nginx `limit_req`, не трогайте `RATE_LIMIT_ENABLED` в проде |
 | лог job'а пуст после рестарта | job'ы in-memory; перезапустите сервис |
 | `pg_restore` killed by timeout | поднимите `SUBPROCESS_TIMEOUT` |
 | БД пропала после ошибки | `DROP` уже прошёл — восстанавливайте из бэкапа повторно |

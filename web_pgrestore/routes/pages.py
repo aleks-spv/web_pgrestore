@@ -8,6 +8,7 @@ from pathlib import Path
 
 from flask import (
     Blueprint,
+    Response,
     current_app,
     jsonify,
     render_template,
@@ -24,6 +25,27 @@ from ..config import (
 from ..security import rate_limited
 
 pages_bp = Blueprint("pages", __name__)
+
+
+# The app ships with static_folder=None, so /static/* and Flask's default
+# favicon route do not exist. Without this stub a browser falls back to
+# /favicon.ico, login_required_api answers 302 -> /login, and that extra
+# request used to rotate the CSRF token of an already-open form and burn a
+# slot in the /login rate limit.
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    '<rect width="64" height="64" rx="14" fill="#2f6feb"/>'
+    '<path d="M32 16c9.4 0 17 7.6 17 17s-7.6 17-17 17S15 42.4 15 33" '
+    'fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/>'
+    '<circle cx="32" cy="33" r="6" fill="#fff"/>'
+    "</svg>"
+)
+
+
+@pages_bp.route("/favicon.ico")
+def favicon() -> Response:
+    """Plain inline SVG placeholder — no icon file is bundled with the app."""
+    return Response(_FAVICON_SVG, mimetype="image/svg+xml")
 
 
 def _env_path_display(env_path) -> str:
