@@ -371,13 +371,11 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
                ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
       },
-      // Длительность шага = конец − начало, в поясе браузера. Нет данных — «—».
-      duration(a, b) {
-        if (!a || !b) return '—';
-        const parse = s => new Date(String(s).replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1'));
-        const ms = parse(b) - parse(a);
-        if (!isFinite(ms) || ms < 0) return '—';
-        let s = Math.round(ms / 1000);
+      // Длительность приходит в секундах (EXTRACT(EPOCH ...)) — рисуем как есть.
+      fmtDur(sec) {
+        if (sec === null || sec === undefined || sec === '') return '—';
+        let s = Math.round(Number(sec));
+        if (!isFinite(s) || s < 0) return '—';
         const h = Math.floor(s / 3600); s -= h * 3600;
         const m = Math.floor(s / 60); s -= m * 60;
         const p = n => String(n).padStart(2, '0');
@@ -405,7 +403,7 @@ button.ghost { border:1px solid #bdc3c7; background:#fff; color:#333; border-rad
             '<td>' + this.esc([e.job, e.step].filter(Boolean).join(' · ')) + '</td>' +
             '<td style="white-space:nowrap">' + this.esc(this.fmt(e.started)) + '</td>' +
             '<td>' + this.resultBadge(e.result) + '</td>' +
-            '<td style="white-space:nowrap">' + this.esc(this.duration(e.started, e.finished)) + '</td>' +
+            '<td style="white-space:nowrap">' + this.esc(this.fmtDur(e.duration)) + '</td>' +
             '<td style="max-width:30rem;max-height:7rem;overflow:hidden;white-space:pre-wrap;' +
                 'word-break:break-word;cursor:pointer" data-open="" ' +
                 'title="Клик — развернуть вывод" onclick="PgJobs.toggle(this)">' +

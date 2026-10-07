@@ -153,9 +153,10 @@ SELECT j.jobname AS job,
 def _pgagent_columns(cur):
     """Probe the schema and build the SELECT list, plus `has_end`.
 
-    `jslend` is missing from some pgAgent releases. Dropping the column then
-    would shift every cell of the table one position left, so the `finished`
-    slot stays and is simply NULL — the UI renders «—» for it.
+    Duration lives in `jslduration` on this pgAgent and in `jslend` on some
+    other releases; if neither exists the column is kept and is NULL, because
+    dropping it would shift every table cell one position left. The UI then
+    renders an em dash.
     """
     cur.execute(
         "SELECT column_name FROM information_schema.columns"
@@ -165,18 +166,23 @@ def _pgagent_columns(cur):
     have = {row[0] for row in cur.fetchall()}
 
     started = "l.jslstart AS started" if "jslstart" in have else "NULL AS started"
-    if "jslend" in have:
-        finished = "l.jslend AS finished"
+
+    # Duration: this pgAgent stores it straight away as `jslduration` (interval).
+    # Fall back to `jslend - jslstart` on releases that lack it, and to NULL
+    # rather than dropping the column — otherwise every table cell would shift
+    # one position left. Seconds come back as a plain number for the UI.
+    if "jslduration" in have:
+        dur_src = "l.jslduration"
+    elif "jslend" in have and "jslstart" in have:
+        dur_src = "(l.jslend - l.jslstart)"
     else:
-        # No `jslend` in this pgAgent release — keep the column (as NULL) so
-        # the table cells do not shift one position left. The UI then renders
-        # an em dash, because there is nothing to subtract.
-        finished = "NULL AS finished"
+        dur_src = "NULL::interval"
 
     return (
         "l.jslstatus::text AS status, "
         "l.jslresult AS result, "
-        f"{started}, {finished}, "
+        f"{started}, "
+        f"EXTRACT(EPOCH FROM {dur_src}) AS duration, "
         "left(l.jsloutput, 20000) AS output"
     )
 
